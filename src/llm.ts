@@ -1,4 +1,4 @@
-import type { MemoryEntry } from "./actors/npc";
+import type { MemoryEntry } from "./actors/npc.ts";
 
 interface ReplyInput {
   name: string;
