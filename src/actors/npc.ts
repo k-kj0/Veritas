@@ -1,5 +1,5 @@
 import { actor } from "rivetkit";
-import { generateNpcReply } from "../llm";
+import { generateNpcReply } from "../llm.ts";
 
 export interface MemoryEntry {
   day: number;
