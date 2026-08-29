@@ -11,7 +11,9 @@
     "resolveJsonModule": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "outDir": "dist"
   },
-  "include": ["src", "client"]
+  "include": ["src", "client", "api"]
 }
