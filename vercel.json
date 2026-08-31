@@ -1,4 +1,5 @@
 {
+  "buildCommand": "npm run build:client",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api" }
   ]
