@@ -21,11 +21,20 @@ export interface NpcCreateInput {
 }
 
 // How much memory (in entries) we actually feed back into the LLM prompt.
-// Keeping this bounded is what keeps per-turn Gemini cost predictable as
+// Keeping this bounded is what keeps per-turn LLM cost predictable as
 // memory grows over many in-game days.
 const MEMORY_WINDOW = 20;
 
 export const npc = actor({
+  // ── PERSISTENCE POINT #1 ─────────────────────────────────────────
+  // Whatever this function returns becomes `c.state` below, and RivetKit
+  // durably stores it. This is the entire difference between an actor and
+  // a normal HTTP handler: in a stateless server, this object would be a
+  // local variable that dies the instant the request finishes. Here, it
+  // survives page refreshes, server restarts, and redeploys, because it
+  // isn't held in this process's memory at all — RivetKit's storage layer
+  // owns it. `createState` only runs ONCE, the first time this actor is
+  // created; every later call reads/writes the same persisted object.
   createState: (_c, input: NpcCreateInput): NpcState => ({
     name: input.name,
     personality: input.personality,
@@ -40,6 +49,13 @@ export const npc = actor({
     talk: async (c, playerId: string, message: string) => {
       const state = c.state;
 
+      // ── PERSISTENCE POINT #2 ───────────────────────────────────────
+      // This mutation is the whole trick. There is no explicit save(),
+      // no database write, no "commit" call — RivetKit persists this
+      // array push automatically because `state` IS the actor's durable
+      // storage, not a copy of it. Compare this to a typical Express/Hono
+      // route handler: if you pushed to an in-memory array there, it
+      // would vanish the moment that request's process ends or restarts.
       state.memory.push({ day: state.currentDay, speaker: playerId, text: message });
 
       const recentMemory = state.memory.slice(-MEMORY_WINDOW);
@@ -54,9 +70,15 @@ export const npc = actor({
         message,
       });
 
+      // Same guarantee applies here — the NPC's own reply is written to
+      // the same durable state as the player's message.
       state.memory.push({ day: state.currentDay, speaker: "npc", text: reply });
       state.relationships[playerId] = (state.relationships[playerId] ?? 0) + scoreDelta(message);
 
+      // `c.broadcast` is a SEPARATE mechanism from persistence — it pushes
+      // a live event to any connected client (see client/main.ts's
+      // `conn.on("npcReply", ...)`). Persistence is what survives a
+      // refresh; broadcast is what updates an already-open tab instantly.
       c.broadcast("npcReply", {
         playerId,
         reply,
@@ -77,6 +99,12 @@ export const npc = actor({
       return c.state.currentDay;
     },
 
+    // ── PERSISTENCE POINT #3 (the proof) ────────────────────────────
+    // This is what client/main.ts calls immediately on page load, BEFORE
+    // any message is sent. It reads `c.state.memory` — the same object
+    // from createState — directly off durable storage. If you refresh the
+    // browser tab right now, this is the call that repopulates the whole
+    // conversation. There is no client-side cache making that happen.
     getMemory: (c) => c.state.memory,
 
     getStatus: (c) => ({
