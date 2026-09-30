@@ -1,126 +1,158 @@
 import { actor } from "rivetkit";
-import { generateNpcReply } from "../llm.ts";
 
-export interface MemoryEntry {
-  day: number;
-  speaker: string; // playerId, or "npc"
-  text: string;
-}
-
-export interface NpcState {
+type MemoryEntry = { day: number; speaker: string; text: string };
+type NpcInput = { name: string; personality: string };
+type NpcState = {
   name: string;
   personality: string;
   currentDay: number;
+  relationships: Record<string, number>;
   memory: MemoryEntry[];
-  relationships: Record<string, number>; // playerId -> affinity score
-}
+  summary: string;
+};
 
-export interface NpcCreateInput {
-  name: string;
-  personality: string;
-}
+// Memory compaction: once raw memory passes MAX_RAW, the oldest entries are
+// folded into `summary` and only the newest KEEP_RECENT stay verbatim.
+const MAX_RAW = 20;
+const KEEP_RECENT = 10;
 
-// How much memory (in entries) we actually feed back into the LLM prompt.
-// Keeping this bounded is what keeps per-turn LLM cost predictable as
-// memory grows over many in-game days.
-const MEMORY_WINDOW = 20;
+// Scheduled behavior: the actor advances its own day on a durable timer,
+// even while no client is connected (the actor sleeps and Rivet wakes it).
+const DAY_MS = 5 * 60 * 1000;
+
+const MODEL = process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini";
+
+async function llm(system: string, user: string): Promise<string> {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) throw new Error("OPENROUTER_API_KEY is not set");
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 300,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+  });
+  if (!res.ok) throw new Error(`LLM request failed: ${res.status}`);
+  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  return data.choices?.[0]?.message?.content?.trim() ?? "";
+}
 
 export const npc = actor({
-  // ── PERSISTENCE POINT #1 ─────────────────────────────────────────
-  // Whatever this function returns becomes `c.state` below, and RivetKit
-  // durably stores it. This is the entire difference between an actor and
-  // a normal HTTP handler: in a stateless server, this object would be a
-  // local variable that dies the instant the request finishes. Here, it
-  // survives page refreshes, server restarts, and redeploys, because it
-  // isn't held in this process's memory at all — RivetKit's storage layer
-  // owns it. `createState` only runs ONCE, the first time this actor is
-  // created; every later call reads/writes the same persisted object.
-  createState: (_c, input: NpcCreateInput): NpcState => ({
-    name: input.name,
-    personality: input.personality,
+  createState: (_c, input: NpcInput): NpcState => ({
+    name: input?.name ?? "Mira",
+    personality: input?.personality ?? "A cautious village herbalist who speaks plainly.",
     currentDay: 0,
-    memory: [],
     relationships: {},
+    memory: [],
+    summary: "",
   }),
 
+  // Runs once, when the actor is first created. Starts the durable day timer.
+  onCreate: async (c) => {
+    await c.schedule.after(DAY_MS, "advanceDay");
+  },
+
   actions: {
-    // Player sends a line of dialogue, NPC replies in character and
-    // remembers both sides of the exchange.
     talk: async (c, playerId: string, message: string) => {
-      const state = c.state;
+      const s = c.state;
+      s.memory.push({ day: s.currentDay, speaker: playerId, text: message });
 
-      // ── PERSISTENCE POINT #2 ───────────────────────────────────────
-      // This mutation is the whole trick. There is no explicit save(),
-      // no database write, no "commit" call — RivetKit persists this
-      // array push automatically because `state` IS the actor's durable
-      // storage, not a copy of it. Compare this to a typical Express/Hono
-      // route handler: if you pushed to an in-memory array there, it
-      // would vanish the moment that request's process ends or restarts.
-      state.memory.push({ day: state.currentDay, speaker: playerId, text: message });
+      const score = s.relationships[playerId] ?? 0;
+      const history = s.memory
+        .slice(-KEEP_RECENT)
+        .map((m) => `${m.speaker === "npc" ? s.name : "Player"}: ${m.text}`)
+        .join("\n");
 
-      const recentMemory = state.memory.slice(-MEMORY_WINDOW);
+      const system =
+        `You are ${s.name}. ${s.personality}\n` +
+        `It is day ${s.currentDay}. Your relationship score with this player is ${score} (0 = stranger, 10 = close friend).\n` +
+        (s.summary ? `What you remember from earlier: ${s.summary}\n` : "") +
+        `Reply in 1-3 short sentences, in character. Respond ONLY with JSON: ` +
+        `{"reply": string, "delta": -2|-1|0|1|2} where delta is how the player's last message changes your feelings.`;
 
-      const reply = await generateNpcReply({
-        name: state.name,
-        personality: state.personality,
-        currentDay: state.currentDay,
-        relationshipScore: state.relationships[playerId] ?? 0,
-        recentMemory,
-        playerId,
-        message,
-      });
+      let reply = "";
+      let delta = 0;
+      try {
+        const raw = await llm(system, history);
+        const json = raw.match(/\{[\s\S]*\}/)?.[0];
+        if (json) {
+          const parsed = JSON.parse(json) as { reply?: string; delta?: number };
+          reply = parsed.reply ?? "";
+          delta = Math.max(-2, Math.min(2, Math.round(parsed.delta ?? 0)));
+        } else {
+          reply = raw;
+        }
+      } catch (err) {
+        console.error("talk: LLM failed", err);
+      }
+      if (!reply) reply = `${s.name} looks away for a moment, lost in thought.`;
 
-      // Same guarantee applies here — the NPC's own reply is written to
-      // the same durable state as the player's message.
-      state.memory.push({ day: state.currentDay, speaker: "npc", text: reply });
-      state.relationships[playerId] = (state.relationships[playerId] ?? 0) + scoreDelta(message);
+      s.memory.push({ day: s.currentDay, speaker: "npc", text: reply });
+      s.relationships[playerId] = Math.max(0, Math.min(10, score + delta));
 
-      // `c.broadcast` is a SEPARATE mechanism from persistence — it pushes
-      // a live event to any connected client (see client/main.ts's
-      // `conn.on("npcReply", ...)`). Persistence is what survives a
-      // refresh; broadcast is what updates an already-open tab instantly.
-      c.broadcast("npcReply", {
+      await compact(c.state);
+
+      const payload = {
         playerId,
         reply,
-        day: state.currentDay,
-        relationship: state.relationships[playerId],
-      });
-
-      return { reply, day: state.currentDay, relationship: state.relationships[playerId] };
+        day: s.currentDay,
+        relationship: s.relationships[playerId],
+      };
+      c.broadcast("npcReply", payload);
+      return payload;
     },
 
-    // Debug/demo-only: fast-forwards simulated days so the "evolves over
-    // time" behavior can be shown live instead of requiring real elapsed
-    // time. This is announced to the player, never silently faked.
-    skipDays: (c, days: number) => {
-      const delta = Math.max(1, Math.floor(days));
-      c.state.currentDay += delta;
+    // Fired by the durable schedule. Also reschedules itself.
+    advanceDay: async (c) => {
+      c.state.currentDay += 1;
+      c.broadcast("dayChanged", c.state.currentDay);
+      await c.schedule.after(DAY_MS, "advanceDay");
+    },
+
+    // Debug helper used by the demo button.
+    skipDays: (c, n: number) => {
+      c.state.currentDay += Math.max(1, Math.floor(n));
       c.broadcast("dayChanged", c.state.currentDay);
       return c.state.currentDay;
     },
 
-    // ── PERSISTENCE POINT #3 (the proof) ────────────────────────────
-    // This is what client/main.ts calls immediately on page load, BEFORE
-    // any message is sent. It reads `c.state.memory` — the same object
-    // from createState — directly off durable storage. If you refresh the
-    // browser tab right now, this is the call that repopulates the whole
-    // conversation. There is no client-side cache making that happen.
     getMemory: (c) => c.state.memory,
 
     getStatus: (c) => ({
+      currentDay: c.state.currentDay,
+      relationships: c.state.relationships,
+    }),
+
+    // Raw durable state, shown in the demo's "actor state" panel.
+    inspect: (c) => ({
       name: c.state.name,
       currentDay: c.state.currentDay,
       relationships: c.state.relationships,
+      summary: c.state.summary,
+      memoryCount: c.state.memory.length,
+      recentMemory: c.state.memory.slice(-5),
     }),
   },
 });
 
-// Placeholder sentiment nudge. This is intentionally simple — swap for a
-// real classifier or a structured field from the LLM response later.
-function scoreDelta(message: string): number {
-  const positive = /\b(thank|help|friend|gift|please)\b/i.test(message);
-  const negative = /\b(hate|stupid|kill|steal)\b/i.test(message);
-  if (positive) return 1;
-  if (negative) return -1;
-  return 0;
+async function compact(s: NpcState) {
+  if (s.memory.length <= MAX_RAW) return;
+  const old = s.memory.slice(0, s.memory.length - KEEP_RECENT);
+  const text = old.map((m) => `${m.speaker === "npc" ? s.name : "Player"}: ${m.text}`).join("\n");
+  try {
+    const merged = await llm(
+      "Summarize what the character remembers about the player in under 80 words. Keep names, facts and how the player treated the character.",
+      `${s.summary ? `Existing summary: ${s.summary}\n\n` : ""}New conversation:\n${text}`
+    );
+    s.summary = merged || s.summary;
+  } catch (err) {
+    console.error("compact: LLM failed, keeping a plain fallback", err);
+    s.summary = `${s.summary} ${text}`.slice(-600);
+  }
+  s.memory = s.memory.slice(-KEEP_RECENT);
 }
