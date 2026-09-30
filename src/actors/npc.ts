@@ -30,7 +30,7 @@ async function llm(system: string, user: string): Promise<string> {
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 300,
+      max_tokens: 600,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -72,25 +72,20 @@ export const npc = actor({
         `You are ${s.name}. ${s.personality}\n` +
         `It is day ${s.currentDay}. Your relationship score with this player is ${score} (0 = stranger, 10 = close friend).\n` +
         (s.summary ? `What you remember from earlier: ${s.summary}\n` : "") +
-        `Reply in 1-3 short sentences, in character. Respond ONLY with JSON: ` +
-        `{"reply": string, "delta": -2|-1|0|1|2} where delta is how the player's last message changes your feelings.`;
+        `Answer clearly and concisely (under 120 words); use plain text and short code lines if needed. Use what you remember about the player. ` +
+        `End with one final line exactly like "MOOD: 1" where the number (-2 to 2) is how the player's last message changes your feelings.`;
 
       let reply = "";
       let delta = 0;
       try {
         const raw = await llm(system, history);
-        const json = raw.match(/\{[\s\S]*\}/)?.[0];
-        if (json) {
-          const parsed = JSON.parse(json) as { reply?: string; delta?: number };
-          reply = parsed.reply ?? "";
-          delta = Math.max(-2, Math.min(2, Math.round(parsed.delta ?? 0)));
-        } else {
-          reply = raw;
-        }
+        const mood = raw.match(/MOOD:\s*(-?\d)/i);
+        delta = mood ? Math.max(-2, Math.min(2, Number(mood[1]))) : 0;
+        reply = raw.replace(/\n?\s*MOOD:[\s\S]*$/i, "").trim();
       } catch (err) {
         console.error("talk: LLM failed", err);
       }
-      if (!reply) reply = `${s.name} looks away for a moment, lost in thought.`;
+      if (!reply) reply = "I lost my train of thought. Could you try that again?";
 
       s.memory.push({ day: s.currentDay, speaker: "npc", text: reply });
       s.relationships[playerId] = Math.max(0, Math.min(10, score + delta));
