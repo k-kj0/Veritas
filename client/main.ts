@@ -17,12 +17,12 @@ const conn = npcHandle.connect();
 const PLAYER_ID = "player-1";
 const METER_MAX = 10;
 const SCENARIOS = [
-  { title: "Introduce yourself", desc: "Tell Mira who you are, then test if she remembers.", prompt: "Hi, I'm Kavya. I'm a final-year student building AI projects." },
-  { title: "Explain a code snippet", desc: "Understand what code does and where it could break.", prompt: "Explain what this does: const total = items.reduce((sum, i) => sum + i.price, 0)" },
-  { title: "Plan a project", desc: "Break an idea into a first-week plan.", prompt: "I want to build a habit tracker. Help me plan the first week." },
-  { title: "Career guidance", desc: "Get next steps for your job search.", prompt: "I'm applying for backend roles. What should I improve first?" },
-  { title: "Test her memory", desc: "Ask what she has stored about you so far.", prompt: "What do you remember about me so far?" },
-  { title: "Change her mood", desc: "Watch the Trust meter react to kindness.", prompt: "Thanks, that was really helpful. I appreciate you." },
+  { title: "Introduce yourself", hue: 160, icon: "✦", desc: "Tell Mira who you are, then test if she remembers.", prompt: "Hi, I'm Kavya. I'm a final-year student building AI projects." },
+  { title: "Explain a code snippet", hue: 215, icon: "</>", desc: "Understand what code does and where it could break.", prompt: "Explain what this does: const total = items.reduce((sum, i) => sum + i.price, 0)" },
+  { title: "Plan a project", hue: 270, icon: "◈", desc: "Break an idea into a first-week plan.", prompt: "I want to build a habit tracker. Help me plan the first week." },
+  { title: "Career guidance", hue: 30, icon: "↗", desc: "Get next steps for your job search.", prompt: "I'm applying for backend roles. What should I improve first?" },
+  { title: "Test her memory", hue: 195, icon: "◎", desc: "Ask what she has stored about you so far.", prompt: "What do you remember about me so far?" },
+  { title: "Change her mood", hue: 320, icon: "♥", desc: "Watch the Trust meter react to kindness.", prompt: "Thanks, that was really helpful. I appreciate you." },
 ];
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -43,6 +43,17 @@ const chips = $<HTMLDivElement>("chips");
 let playerTexts: string[] = [];
 let lastName = "";
 let lastRel = 0;
+
+const orb = document.querySelector(".orb");
+function think(on: boolean) {
+  orb?.classList.toggle("thinking", on);
+}
+
+// Soft light that follows the pointer (hidden for reduced-motion users via CSS).
+const cursorGlow = document.getElementById("cursor-glow");
+window.addEventListener("pointermove", (e) => {
+  if (cursorGlow) cursorGlow.style.transform = `translate(${e.clientX - 300}px, ${e.clientY - 300}px)`;
+});
 
 function toast(text: string) {
   const t = document.createElement("div");
@@ -140,12 +151,14 @@ async function send(message: string) {
   sendBtn.disabled = true;
   chips.querySelectorAll("button").forEach((b) => (b.disabled = true));
   typing.classList.add("active");
+  think(true);
   chatLog.scrollTop = chatLog.scrollHeight;
   try {
     await conn.talk(PLAYER_ID, text);
   } catch (err) {
     console.error(err);
     typing.classList.remove("active");
+    think(false);
     line("Mira is away right now. Try again in a moment.", "system");
   } finally {
     sendBtn.disabled = false;
@@ -153,11 +166,15 @@ async function send(message: string) {
   }
 }
 
+let cardIndex = 0;
 for (const s of SCENARIOS) {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "ex";
-  b.innerHTML = "<b></b><span></span><i>→</i>";
+  b.innerHTML = '<em class="ic"></em><b></b><span></span><i>→</i>';
+  (b.querySelector(".ic") as HTMLElement).textContent = s.icon;
+  b.style.setProperty("--h", String(s.hue));
+  b.style.setProperty("--k", String(cardIndex++));
   (b.querySelector("b") as HTMLElement).textContent = s.title;
   (b.querySelector("span") as HTMLElement).textContent = s.desc;
   b.addEventListener("click", () => {
@@ -189,6 +206,7 @@ conn.onError((err: unknown) => {
 
 conn.on("npcReply", (d: { playerId: string; reply: string; day: number; relationship: number }) => {
   typing.classList.remove("active");
+    think(false);
   line(d.reply, "npc");
   setDay(d.day);
   setRelationship(d.relationship);
