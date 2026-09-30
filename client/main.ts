@@ -16,7 +16,7 @@ const npcHandle = client.npc.getOrCreate(["demo-room", "mira"], {
 const conn = npcHandle.connect();
 
 const PLAYER_ID = "player-1";
-const RELATIONSHIP_METER_MAX = 10; // relationship score that fills the meter bar completely
+const RELATIONSHIP_METER_MAX = 10;
 
 const chatLog = document.getElementById("chat-log") as HTMLDivElement;
 const emptyHint = document.getElementById("empty-hint") as HTMLParagraphElement | null;
@@ -30,6 +30,32 @@ const relFill = document.getElementById("relationship-fill") as HTMLSpanElement;
 const statusLabel = document.getElementById("status-label") as HTMLSpanElement;
 const statusDot = document.getElementById("status-dot") as HTMLSpanElement;
 const typingIndicator = document.getElementById("typing-indicator") as HTMLDivElement;
+
+// ---- Actor state inspector (built here so index.html needs no change) ----
+const inspectorStyle = document.createElement("style");
+inspectorStyle.textContent = `
+  .inspector { margin-top: 18px; border: 1px solid rgba(217,184,120,0.16); border-radius: 12px; background: rgba(255,255,255,0.02); }
+  .inspector summary { cursor: pointer; padding: 12px 16px; font-size: 13px; color: #a9a89f; }
+  .inspector pre { margin: 0; padding: 0 16px 16px; font-size: 12px; line-height: 1.5; color: #dfe8e2; white-space: pre-wrap; word-break: break-word; }
+`;
+document.head.appendChild(inspectorStyle);
+
+const inspector = document.createElement("details");
+inspector.className = "inspector";
+inspector.innerHTML =
+  '<summary>Live actor state (read straight from Rivet)</summary><pre id="inspector-json">Loading…</pre>';
+document.querySelector(".shell")?.appendChild(inspector);
+const inspectorJson = document.getElementById("inspector-json") as HTMLPreElement;
+
+async function refreshInspector() {
+  try {
+    const state = await npcHandle.inspect();
+    inspectorJson.textContent = JSON.stringify(state, null, 2);
+  } catch (err) {
+    console.error("failed to load actor state:", err);
+    inspectorJson.textContent = "Could not read actor state.";
+  }
+}
 
 function hideEmptyHint() {
   if (emptyHint) emptyHint.style.display = "none";
@@ -50,6 +76,7 @@ function appendLine(speaker: "You" | "Mira" | "System", text: string, cls: "play
     const avatar = document.createElement("div");
     avatar.className = `avatar ${cls}`;
     avatar.textContent = cls === "npc" ? "M" : "Y";
+    avatar.setAttribute("aria-label", speaker);
 
     const bubble = document.createElement("div");
     bubble.className = "bubble";
@@ -83,8 +110,7 @@ function setTyping(active: boolean) {
 function updateRelationship(score: number) {
   relLabel.textContent = String(score);
   const clamped = Math.max(0, Math.min(RELATIONSHIP_METER_MAX, score));
-  const pct = (clamped / RELATIONSHIP_METER_MAX) * 100;
-  relFill.style.width = `${pct}%`;
+  relFill.style.width = `${(clamped / RELATIONSHIP_METER_MAX) * 100}%`;
 }
 
 setStatus("connecting");
@@ -103,12 +129,15 @@ conn.on(
     appendLine("Mira", data.reply, "npc");
     dayLabel.textContent = String(data.day);
     updateRelationship(data.relationship);
+    void refreshInspector();
   }
 );
 
+// Fires on the skip button AND on the actor's own durable timer (every 5 min).
 conn.on("dayChanged", (day: number) => {
   dayLabel.textContent = String(day);
   appendLine("System", `A new day begins (day ${day}).`, "system");
+  void refreshInspector();
 });
 
 form.addEventListener("submit", async (e) => {
@@ -160,3 +189,5 @@ npcHandle
     updateRelationship(status.relationships[PLAYER_ID] ?? 0);
   })
   .catch((err: unknown) => console.error("failed to load status:", err));
+
+void refreshInspector();
