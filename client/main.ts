@@ -124,7 +124,7 @@ form.addEventListener("submit", async (e) => {
   } catch (err) {
     console.error(err);
     setTyping(false);
-    appendLine("System", "Mira didn't respond — check the server logs / API key.", "system");
+    appendLine("System", "Mira is away right now. Try again in a moment.", "system");
   } finally {
     sendBtn.disabled = false;
   }
@@ -134,6 +134,9 @@ skipBtn.addEventListener("click", async () => {
   skipBtn.disabled = true;
   try {
     await conn.skipDays(1);
+  } catch (err) {
+    console.error(err);
+    appendLine("System", "Could not advance the day. Try again in a moment.", "system");
   } finally {
     skipBtn.disabled = false;
   }
