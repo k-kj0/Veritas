@@ -5,11 +5,11 @@ const client = createClient<typeof registry>(`${window.location.origin}/api/rive
 
 // One NPC instance keyed by a fixed room + character id, so a refresh
 // reconnects to the SAME actor and keeps its memory.
-const npcHandle = client.npc.getOrCreate(["demo-room", "mira-v3"], {
+const npcHandle = client.npc.getOrCreate(["demo-room", "mira-v4"], {
   createWithInput: {
     name: "Mira",
     personality:
-      "A warm, practical AI memory partner for builders and students. She remembers the user's name, goals and projects, gives clear, concise answers, and asks a short follow-up when useful.",
+      "A warm, practical AI memory partner for builders and engineers. She remembers the user's name, goals and projects, gives clear, concise answers, and asks a short follow-up when useful.",
   },
 });
 const conn = npcHandle.connect();
@@ -17,12 +17,12 @@ const conn = npcHandle.connect();
 const PLAYER_ID = "player-1";
 const METER_MAX = 10;
 const SCENARIOS = [
-  { title: "Introduce yourself", hue: 160, icon: "✦", desc: "Tell Mira who you are, then test if she remembers.", prompt: "Hi, I'm Kavya. I'm a final-year student building AI projects." },
+  { title: "Introduce yourself", hue: 160, icon: "✦", desc: "Share your background, then test recall.", prompt: "Hi, I'm Kavya. I'm a recent graduate building AI and backend projects." },
   { title: "Explain a code snippet", hue: 215, icon: "</>", desc: "Understand what code does and where it could break.", prompt: "Explain what this does: const total = items.reduce((sum, i) => sum + i.price, 0)" },
   { title: "Plan a project", hue: 270, icon: "◈", desc: "Break an idea into a first-week plan.", prompt: "I want to build a habit tracker. Help me plan the first week." },
-  { title: "Career guidance", hue: 30, icon: "↗", desc: "Get next steps for your job search.", prompt: "I'm applying for backend roles. What should I improve first?" },
-  { title: "Test her memory", hue: 195, icon: "◎", desc: "Ask what she has stored about you so far.", prompt: "What do you remember about me so far?" },
-  { title: "Change her mood", hue: 320, icon: "♥", desc: "Watch the Trust meter react to kindness.", prompt: "Thanks, that was really helpful. I appreciate you." },
+  { title: "Career guidance", hue: 30, icon: "↗", desc: "Get next steps for an engineering job search.", prompt: "I'm a recent graduate applying for backend engineering roles. What should I improve first?" },
+  { title: "Test recall", hue: 195, icon: "◎", desc: "Ask what Mira has stored about you so far.", prompt: "What do you remember about me so far?" },
+  { title: "Test the trust score", hue: 320, icon: "♥", desc: "Watch the Trust score react to feedback.", prompt: "Thanks, that was really helpful. I appreciate it." },
 ];
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -97,9 +97,9 @@ function setRelationship(score: number) {
   relFill.style.width = `${(Math.max(0, Math.min(METER_MAX, score)) / METER_MAX) * 100}%`;
   if (score > lastRel) {
     bump(relFill, "glow");
-    toast("Mira warmed up to you.");
+    toast("Trust score increased.");
   } else if (score < lastRel) {
-    toast("Mira grew more guarded.");
+    toast("Trust score decreased.");
   }
   lastRel = score;
 }
