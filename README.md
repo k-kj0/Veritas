@@ -2,7 +2,7 @@
 
 **An AI memory demo where the memory lives in a [Rivet Actor](https://rivet.dev/actors/docs/), not in the browser.**
 
-Live demo: https://veritas-eta-nine.vercel.app
+Live demo: https://veritas-rrv2q7kyz-kavyakjais-6296s-projects.vercel.app/
 
 Most "AI with memory" demos keep history in a browser variable or a server array, so it disappears on refresh, restart or redeploy. In Veritas, a character called **Mira** keeps her memory in durable actor state. Tell her something, refresh the page, redeploy the app: she still knows.
 
