@@ -9,6 +9,9 @@ type NpcState = {
   relationships: Record<string, number>;
   memory: MemoryEntry[];
   summary: string;
+  lastActive: number;
+  lastTick: number;
+  timerOn: boolean;
 };
 
 // Memory compaction: once raw memory passes MAX_RAW, the oldest entries are
@@ -19,6 +22,9 @@ const KEEP_RECENT = 10;
 // Scheduled behavior: the actor advances its own day on a durable timer,
 // even while no client is connected (the actor sleeps and Rivet wakes it).
 const DAY_MS = 5 * 60 * 1000;
+// Stop ticking after this much inactivity so an unattended demo does not wake
+// forever. The next message restarts the timer and catches the day count up.
+const IDLE_MS = 60 * 60 * 1000;
 
 const MODEL = process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini";
 
@@ -50,6 +56,9 @@ export const npc = actor({
     relationships: {},
     memory: [],
     summary: "",
+    lastActive: Date.now(),
+    lastTick: Date.now(),
+    timerOn: true,
   }),
 
   // Runs once, when the actor is first created. Starts the durable day timer.
@@ -60,6 +69,14 @@ export const npc = actor({
   actions: {
     talk: async (c, playerId: string, message: string) => {
       const s = c.state;
+      const now = Date.now();
+      if (!s.timerOn) {
+        s.currentDay += Math.min(50, Math.floor((now - s.lastTick) / DAY_MS));
+        s.lastTick = now;
+        s.timerOn = true;
+        await c.schedule.after(DAY_MS, "advanceDay");
+      }
+      s.lastActive = now;
       s.memory.push({ day: s.currentDay, speaker: playerId, text: message });
 
       const score = s.relationships[playerId] ?? 0;
@@ -104,9 +121,15 @@ export const npc = actor({
 
     // Fired by the durable schedule. Also reschedules itself.
     advanceDay: async (c) => {
+      const now = Date.now();
       c.state.currentDay += 1;
+      c.state.lastTick = now;
       c.broadcast("dayChanged", c.state.currentDay);
-      await c.schedule.after(DAY_MS, "advanceDay");
+      if (now - c.state.lastActive < IDLE_MS) {
+        await c.schedule.after(DAY_MS, "advanceDay");
+      } else {
+        c.state.timerOn = false; // idle: sleep until the next message
+      }
     },
 
     // Debug helper used by the demo button.
