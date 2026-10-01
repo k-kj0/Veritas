@@ -2,7 +2,7 @@
 
 **An AI memory demo where the memory lives in a [Rivet Actor](https://rivet.dev/actors/docs/), not in the browser.**
 
-Live demo: https://veritas-rrv2q7kyz-kavyakjais-6296s-projects.vercel.app/
+Live demo: https://veritas-eta-nine.vercel.app
 
 Most "AI with memory" demos keep history in a browser variable or a server array, so it disappears on refresh, restart or redeploy. In Veritas, a character called **Mira** keeps her memory in durable actor state. Tell her something, refresh the page, redeploy the app: she still knows.
 
@@ -14,7 +14,7 @@ Open the demo and click an example card, or type your own message.
 
 | Try this | What it shows |
 | --- | --- |
-| "Hi, I'm Kavya. I'm a final-year student..." | She stores the message. The "Your name" fact appears. |
+| "Hi, I'm Kavya. I'm a new grad..." | She stores the message. The "Your name" fact appears. |
 | "What do you remember about me so far?" | She answers from stored history and summary. |
 | "Thanks, that was really helpful." | The Trust meter moves (she scores each message from -2 to +2). |
 | Refresh the page | History, day and trust load back from the actor. |
