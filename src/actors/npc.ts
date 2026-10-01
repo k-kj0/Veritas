@@ -87,10 +87,10 @@ export const npc = actor({
 
       const system =
         `You are ${s.name}. ${s.personality}\n` +
-        `It is day ${s.currentDay}. Your relationship score with this player is ${score} (0 = stranger, 10 = close friend).\n` +
+        `It is day ${s.currentDay}. Your trust score with this player is ${score} (0 = new, 10 = well established).\n` +
         (s.summary ? `What you remember from earlier: ${s.summary}\n` : "") +
         `Answer clearly and concisely (under 120 words); use plain text and short code lines if needed. Use what you remember about the player. ` +
-        `End with one final line exactly like "MOOD: 1" where the number (-2 to 2) is how the player's last message changes your feelings.`;
+        `End with one final line exactly like "MOOD: 1" where the number (-2 to 2) is how positive (+) or negative (-) the player's last message is.`;
 
       let reply = "";
       let delta = 0;
