@@ -5,7 +5,7 @@ const client = createClient<typeof registry>(`${window.location.origin}/api/rive
 
 // One NPC instance keyed by a fixed room + character id, so a refresh
 // reconnects to the SAME actor and keeps its memory.
-const npcHandle = client.npc.getOrCreate(["demo-room", "mira-v2"], {
+const npcHandle = client.npc.getOrCreate(["demo-room", "mira-v3"], {
   createWithInput: {
     name: "Mira",
     personality:
