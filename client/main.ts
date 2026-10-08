@@ -3,16 +3,42 @@ import type { registry } from "../src/registry.ts";
 
 const client = createClient<typeof registry>(`${window.location.origin}/api/rivet`);
 
-// One NPC instance keyed by a fixed room + character id, so a refresh
-// reconnects to the SAME actor and keeps its memory.
-const npcHandle = client.npc.getOrCreate(["demo-room", "mira-v4"], {
-  createWithInput: {
-    name: "Mira",
-    personality:
-      "A warm, practical AI memory partner for builders and engineers. She remembers the user's name, goals and projects, gives clear, concise answers, and asks a short follow-up when useful.",
-  },
-});
-const conn = npcHandle.connect();
+// Which actor this browser talks to.
+// - No saved chat id  -> the original actor (same as before, nothing changes).
+// - After "Delete chat" -> a brand new random id, so a brand new empty Mira.
+// The id is saved in localStorage, so refresh / new tab keeps the same chat.
+const CHAT_ID_KEY = "veritas:chatId";
+
+function loadChatId(): string {
+  try {
+    return localStorage.getItem(CHAT_ID_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveChatId(id: string) {
+  try {
+    localStorage.setItem(CHAT_ID_KEY, id);
+  } catch {
+    /* storage blocked: new chat still works until the page is reloaded */
+  }
+}
+
+function makeHandle(chatId: string) {
+  const key = chatId ? ["mira-v4", chatId] : ["demo-room", "mira-v4"];
+  return client.npc.getOrCreate(key, {
+    createWithInput: {
+      name: "Mira",
+      personality:
+        "A warm, practical AI memory partner for builders and engineers. She remembers the user's name, goals and projects, gives clear, concise answers, and asks a short follow-up when useful.",
+    },
+  });
+}
+
+let chatId = loadChatId();
+let npcHandle = makeHandle(chatId);
+let conn = npcHandle.connect();
 
 const PLAYER_ID = "player-1";
 const METER_MAX = 10;
@@ -40,9 +66,22 @@ const statusDot = $<HTMLElement>("status-dot");
 const typing = $<HTMLDivElement>("typing-indicator");
 const chips = $<HTMLDivElement>("chips");
 
+const DEFAULT_SUMMARY =
+  "Nothing summarized yet. Recent messages are kept word for word; older ones get compressed.";
+
 let playerTexts: string[] = [];
 let lastName = "";
 let lastRel = 0;
+
+// Highlight style for a selected example card.
+const styleTag = document.createElement("style");
+styleTag.textContent = `
+  .ex.selected { outline: 2px solid hsl(var(--h, 200) 80% 60%); box-shadow: 0 0 0 4px hsl(var(--h, 200) 80% 60% / 0.18); }
+  #delete-chat-btn { margin: 10px 0 0; padding: 8px 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.18); background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer; opacity: 0.85; }
+  #delete-chat-btn:hover { opacity: 1; border-color: rgba(255,120,120,0.7); }
+  #delete-chat-btn:disabled { opacity: 0.4; cursor: default; }
+`;
+document.head.appendChild(styleTag);
 
 const orb = document.querySelector(".orb");
 function think(on: boolean) {
@@ -142,14 +181,18 @@ async function refreshPanel() {
   }
 }
 
+function setBusy(busy: boolean) {
+  sendBtn.disabled = busy;
+  chips.querySelectorAll("button").forEach((b) => (b.disabled = busy));
+}
+
 async function send(message: string) {
   const text = message.trim();
   if (!text) return;
   line(text, "player");
   playerTexts.push(text);
   input.value = "";
-  sendBtn.disabled = true;
-  chips.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  setBusy(true);
   typing.classList.add("active");
   think(true);
   chatLog.scrollTop = chatLog.scrollHeight;
@@ -161,9 +204,17 @@ async function send(message: string) {
     think(false);
     line("Mira is away right now. Try again in a moment.", "system");
   } finally {
-    sendBtn.disabled = false;
-    chips.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    setBusy(false);
   }
+}
+
+// ---- Example cards: 1st click = select + send, 2nd click = unselect ----
+let selectedCard: HTMLButtonElement | null = null;
+
+function clearSelection() {
+  selectedCard?.classList.remove("selected");
+  selectedCard?.setAttribute("aria-pressed", "false");
+  selectedCard = null;
 }
 
 let cardIndex = 0;
@@ -171,6 +222,7 @@ for (const s of SCENARIOS) {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "ex";
+  b.setAttribute("aria-pressed", "false");
   b.innerHTML = '<em class="ic"></em><b></b><span></span><i>→</i>';
   (b.querySelector(".ic") as HTMLElement).textContent = s.icon;
   b.style.setProperty("--h", String(s.hue));
@@ -178,6 +230,15 @@ for (const s of SCENARIOS) {
   (b.querySelector("b") as HTMLElement).textContent = s.title;
   (b.querySelector("span") as HTMLElement).textContent = s.desc;
   b.addEventListener("click", () => {
+    if (selectedCard === b) {
+      // second click: just unselect, send nothing
+      clearSelection();
+      return;
+    }
+    clearSelection();
+    selectedCard = b;
+    b.classList.add("selected");
+    b.setAttribute("aria-pressed", "true");
     document.getElementById("chat")?.scrollIntoView({ behavior: "smooth", block: "center" });
     void send(s.prompt);
   });
@@ -196,28 +257,56 @@ for (let i = 0; i < 14; i++) {
   flies.appendChild(f);
 }
 
-setStatus("connecting");
-conn.onOpen(() => setStatus("connected"));
-conn.onClose(() => setStatus("disconnected"));
-conn.onError((err: unknown) => {
-  setStatus("error");
-  console.error("connection error:", err);
-});
+// ---- Connection wiring (re-run when a new chat is started) ----
+function wireConnection() {
+  setStatus("connecting");
+  conn.onOpen(() => setStatus("connected"));
+  conn.onClose(() => setStatus("disconnected"));
+  conn.onError((err: unknown) => {
+    setStatus("error");
+    console.error("connection error:", err);
+  });
 
-conn.on("npcReply", (d: { playerId: string; reply: string; day: number; relationship: number }) => {
-  typing.classList.remove("active");
+  conn.on("npcReply", (d: { playerId: string; reply: string; day: number; relationship: number }) => {
+    typing.classList.remove("active");
     think(false);
-  line(d.reply, "npc");
-  setDay(d.day);
-  setRelationship(d.relationship);
-  void refreshPanel();
-});
+    line(d.reply, "npc");
+    setDay(d.day);
+    setRelationship(d.relationship);
+    void refreshPanel();
+  });
 
-// Fires for the demo button and for the actor's own durable timer.
-conn.on("dayChanged", (day: number) => {
-  setDay(day);
-  line(`A new day begins (day ${day}).`, "system");
-});
+  // Fires for the demo button and for the actor's own durable timer.
+  conn.on("dayChanged", (day: number) => {
+    setDay(day);
+    line(`A new day begins (day ${day}).`, "system");
+  });
+}
+
+// Restore everything from the actor on load: this is the persistence proof.
+function loadFromActor() {
+  npcHandle
+    .getMemory()
+    .then((memory: { day: number; speaker: string; text: string }[]) => {
+      for (const m of memory) {
+        if (m.speaker === PLAYER_ID) {
+          line(m.text, "player");
+          playerTexts.push(m.text);
+        } else if (m.speaker === "npc") line(m.text, "npc");
+      }
+      return refreshPanel();
+    })
+    .catch((err: unknown) => console.error("failed to load memory:", err));
+
+  npcHandle
+    .getStatus()
+    .then((s: { currentDay: number; relationships: Record<string, number> }) => {
+      lastRel = s.relationships[PLAYER_ID] ?? 0;
+      setDay(s.currentDay);
+      setRelationship(lastRel);
+    })
+    .catch((err: unknown) => console.error("failed to load status:", err));
+}
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -236,25 +325,52 @@ skipBtn.addEventListener("click", async () => {
   }
 });
 
-// Restore everything from the actor on load: this is the persistence proof.
-npcHandle
-  .getMemory()
-  .then((memory: { day: number; speaker: string; text: string }[]) => {
-    for (const m of memory) {
-      if (m.speaker === PLAYER_ID) {
-        line(m.text, "player");
-        playerTexts.push(m.text);
-      } else if (m.speaker === "npc") line(m.text, "npc");
-    }
-    return refreshPanel();
-  })
-  .catch((err: unknown) => console.error("failed to load memory:", err));
+// ---- Delete chat: clears the screen and starts a brand new, empty Mira ----
+const deleteBtn = document.createElement("button");
+deleteBtn.id = "delete-chat-btn";
+deleteBtn.type = "button";
+deleteBtn.textContent = "Delete chat";
+form.insertAdjacentElement("afterend", deleteBtn);
 
-npcHandle
-  .getStatus()
-  .then((s: { currentDay: number; relationships: Record<string, number> }) => {
-    lastRel = s.relationships[PLAYER_ID] ?? 0;
-    setDay(s.currentDay);
-    setRelationship(lastRel);
-  })
-  .catch((err: unknown) => console.error("failed to load status:", err));
+deleteBtn.addEventListener("click", async () => {
+  if (!confirm("Delete this chat and start a new one? Mira will forget everything from this chat.")) return;
+  deleteBtn.disabled = true;
+  try {
+    // drop the old connection
+    try {
+      await (conn as unknown as { dispose?: () => Promise<void> }).dispose?.();
+    } catch {
+      /* ignore */
+    }
+
+    // new empty actor
+    chatId = crypto.randomUUID();
+    saveChatId(chatId);
+    npcHandle = makeHandle(chatId);
+    conn = npcHandle.connect();
+
+    // reset the screen
+    chatLog.querySelectorAll(".row").forEach((r) => r.remove());
+    if (emptyHint && !emptyHint.isConnected) chatLog.appendChild(emptyHint);
+    playerTexts = [];
+    lastName = "";
+    lastRel = 0;
+    typing.classList.remove("active");
+    think(false);
+    clearSelection();
+    setBusy(false);
+    $("mem-name").textContent = "Not told yet";
+    $("mem-count").textContent = "0";
+    $("mem-summary").textContent = DEFAULT_SUMMARY;
+    setDay(0);
+    setRelationship(0);
+
+    wireConnection();
+    toast("New chat started.");
+  } finally {
+    deleteBtn.disabled = false;
+  }
+});
+
+wireConnection();
+loadFromActor();
