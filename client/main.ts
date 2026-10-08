@@ -3,9 +3,28 @@ import type { registry } from "../src/registry.ts";
 
 const client = createClient<typeof registry>(`${window.location.origin}/api/rivet`);
 
-// One NPC instance keyed by a fixed room + character id, so a refresh
-// reconnects to the SAME actor and keeps its memory.
-const npcHandle = client.npc.getOrCreate(["demo-room", "mira-v4"], {
+// Each visitor (browser profile) gets a random id, saved in localStorage.
+// Same browser: refresh / new tab -> same id -> same Mira, memory kept.
+// New browser, other Google profile, incognito, other device -> new id -> fresh Mira.
+function getVisitorId(): string {
+  try {
+    let id = localStorage.getItem("veritas:visitorId");
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem("veritas:visitorId", id);
+    }
+    return id;
+  } catch {
+    // storage blocked (private mode etc.): fall back to a per-load id
+    return crypto.randomUUID();
+  }
+}
+
+const visitorId = getVisitorId();
+
+// One NPC instance per visitor, so a refresh reconnects to the SAME actor
+// and keeps its memory, while other people get their own Mira.
+const npcHandle = client.npc.getOrCreate(["mira-v4", visitorId], {
   createWithInput: {
     name: "Mira",
     personality:
@@ -206,7 +225,7 @@ conn.onError((err: unknown) => {
 
 conn.on("npcReply", (d: { playerId: string; reply: string; day: number; relationship: number }) => {
   typing.classList.remove("active");
-    think(false);
+  think(false);
   line(d.reply, "npc");
   setDay(d.day);
   setRelationship(d.relationship);
